@@ -1,0 +1,26 @@
+# .github/workflows/devsecops.yml
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image (if using custom Dockerfile)
+        run: docker build -t juice-shop .
+
+      - name: Run Trivy security scan (container image)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'bkimminich/juice-shop:latest'  # lub 'juice-shop' jeśli budujesz
+          format: 'table'
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
