@@ -64,9 +64,10 @@ jobs:
         ports:
           - 3000:3000
     steps:
+      - uses: actions/checkout@v4
       - name: DAST Scan with OWASP ZAP
-        uses: zaproxy/action-full-scan@v0.2.0
+        uses: zaproxy/action-baseline@v0.1.0
         with:
           target: 'http://juice-shop:3000'
-          docker_image: 'ghcr.io/zaproxy/zaproxy:stable'
+          token: ${{ secrets.GITHUB_TOKEN }}
 
