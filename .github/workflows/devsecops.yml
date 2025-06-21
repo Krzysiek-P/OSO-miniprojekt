@@ -28,8 +28,8 @@ jobs:
         with:
           project: 'Juice-Shop'
           path: "./juice-shop/"
-          format: "SARIF,HTML"
-          fail_on_severity: "NONE"  # Wyłącz failowanie na podatnościach
+          format: "SARIF"
+          args: "--fail_on_severity NONE"  # Wyłącz failowanie na podatnościach
       - name: Upload Dependency-Check results
         uses: github/codeql-action/upload-sarif@v3
         if: always()  # Zawsze przesyła wyniki, nawet przy błędach
@@ -45,9 +45,10 @@ jobs:
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         with:
-          severity-level: "high"
-          sarif-output: "gitleaks-results.sarif"
-          exit-code: "0"  # Wyłącz failowanie
+          config-path: .gtileaks.toml
+          report-format: sarif
+          report-path: gitleaks-results.sarif
+        continue-on-error: true
       - name: Upload Gitleaks results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
@@ -72,38 +73,49 @@ jobs:
 
   build-and-scan:
     needs: [dependency-check, gitleaks, semgrep]
-    if: always()  # Wykonuj nawet jeśli poprzednie joby failują
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      - name: Build Docker image
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: yourusername/juice-shop
+          tags: |
+            type=raw,value=latest
+            type=sha
+      - name: Login to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+      - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: ./juice-shop
           file: ./juice-shop/Dockerfile
-          tags: local-scan:latest
-          load: true
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: "local-scan:latest"
-          format: "sarif"
-          output: "trivy-results.sarif"
-          severity: "CRITICAL,HIGH"
-          exit-code: "0"  # Wyłącz failowanie
+          image-ref: yourusername/juice-shop:latest
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: 0
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: ./trivy-results.sarif
-      - name: Push to Docker Hub (opcjonalne)
-        uses: docker/build-push-action@v5
-        with:
-          push: true
-          tags: yourusername/juice-shop:latest
-          secrets: ${{ secrets.DOCKER_HUB_TOKEN }}
 
   dast-scan:
     needs: build-and-scan
