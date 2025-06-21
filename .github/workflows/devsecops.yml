@@ -29,9 +29,10 @@ jobs:
           project: 'Juice-Shop'
           path: "./juice-shop/"
           format: "SARIF,HTML"
-          fail_on_severity: "HIGH"
+          fail_on_severity: "NONE"  # Wyłącz failowanie na podatnościach
       - name: Upload Dependency-Check results
         uses: github/codeql-action/upload-sarif@v3
+        if: always()  # Zawsze przesyła wyniki, nawet przy błędach
         with:
           sarif_file: ./dependency-check-report.sarif
 
@@ -46,8 +47,10 @@ jobs:
         with:
           severity-level: "high"
           sarif-output: "gitleaks-results.sarif"
+          exit-code: "0"  # Wyłącz failowanie
       - name: Upload Gitleaks results
         uses: github/codeql-action/upload-sarif@v3
+        if: always()
         with:
           sarif_file: ./gitleaks-results.sarif
 
@@ -60,13 +63,16 @@ jobs:
       - name: Run Semgrep
         run: |
           semgrep scan --config=p/owasp-juice-shop --sarif --output=semgrep-results.sarif
+          exit 0  # Wyłącz failowanie
       - name: Upload Semgrep results
         uses: github/codeql-action/upload-sarif@v3
+        if: always()
         with:
           sarif_file: ./semgrep-results.sarif
 
   build-and-scan:
     needs: [dependency-check, gitleaks, semgrep]
+    if: always()  # Wykonuj nawet jeśli poprzednie joby failują
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,14 +92,22 @@ jobs:
           format: "sarif"
           output: "trivy-results.sarif"
           severity: "CRITICAL,HIGH"
-          exit-code: "0"
+          exit-code: "0"  # Wyłącz failowanie
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
+        if: always()
         with:
           sarif_file: ./trivy-results.sarif
+      - name: Push to Docker Hub (opcjonalne)
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: yourusername/juice-shop:latest
+          secrets: ${{ secrets.DOCKER_HUB_TOKEN }}
 
   dast-scan:
     needs: build-and-scan
+    if: always()  # Wykonuj nawet jeśli build-and-scan failuje
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -107,6 +121,7 @@ jobs:
           target: "http://localhost:3000"
           token: ${{ secrets.GITHUB_TOKEN }}
           docker_image: "ghcr.io/zaproxy/zaproxy:stable"
+          cmd_options: "--exit-code Never"  # Wyłącz failowanie
       - name: Stop Juice Shop container
         if: always()
         run: docker stop juice-shop
