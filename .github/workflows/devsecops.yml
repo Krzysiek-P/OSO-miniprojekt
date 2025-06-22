@@ -14,7 +14,7 @@ permissions:
   issues: write
 
 env:
-  IMAGE_NAME: "ghcr.io/krzysiek-p/juice-shop"
+  IMAGE_NAME: ghcr.io/krzysiek-p/juice-shop
 
 jobs:
   dependency-check:
@@ -110,7 +110,7 @@ jobs:
           format: "sarif"
           output: "trivy-results.sarif"
           severity: "CRITICAL,HIGH"
-          exit-code: "1"  # Zmienione na 1, aby nie przerywać workflow
+          exit-code: "1"
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
@@ -151,12 +151,12 @@ jobs:
           target: "http://juice-shop:3000"
           cmd_options: "-a -T 300"
           container_name: "juice-shop"
-        continue-on-error: true  # Kontynuuj nawet jeśli ZAP znajdzie podatności
+        continue-on-error: true
 
   push-to-ghcr:
     name: Push to GitHub Container Registry
     needs: [build-and-scan, dast-scan]
-    if: always()  # Wykonaj zawsze, niezależnie od statusu poprzednich jobów
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Login to GHCR
@@ -171,6 +171,4 @@ jobs:
           context: ./juice-shop
           file: ./juice-shop/Dockerfile
           push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          tags: ${{ env.IMAGE_NAME }}:latest,${{ env.IMAGE_NAME }}:${{ github.sha }}
