@@ -738,3 +738,8 @@ export function close (exitCode: number | undefined) {
 // stop server on sigint or sigterm signals
 process.on('SIGINT', () => { close(0) })
 process.on('SIGTERM', () => { close(0) })
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', "default-src 'self'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  next();
+});
