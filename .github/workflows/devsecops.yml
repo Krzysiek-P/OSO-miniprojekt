@@ -92,7 +92,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push Docker image (temporary)
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: ./juice-shop
@@ -118,28 +118,30 @@ jobs:
   dast-scan:
     name: Dynamic Analysis (DAST)
     needs: build-and-scan
-    if: always()
     runs-on: ubuntu-latest
     services:
       juice-shop:
         image: ghcr.io/krzysiek-p/juice-shop:local-scan
         ports:
           - 3000:3000
+        env:
+          NODE_ENV: ci
+          PORT: 3000
         options: >-
           --health-cmd "curl -f http://localhost:3000 || exit 1"
           --health-interval 10s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
+          --health-start-period 10s
 
     steps:
       - name: Wait for Juice Shop to start
         run: |
           echo "Waiting for Juice Shop to be healthy..."
-          docker inspect --format='{{json .State.Health.Status}}' juice-shop
-          while [ $(docker inspect --format='{{json .State.Health.Status}}' juice-shop) != "\"healthy\"" ]; do
+          timeout 300 bash -c 'until docker inspect juice-shop --format "{{json .State.Health.Status}}" | grep -q "healthy"; do
             sleep 5;
             docker logs juice-shop --tail 20 || true;
-          done
+          done'
           echo "Juice Shop is ready!"
 
       - name: Run OWASP ZAP scan
