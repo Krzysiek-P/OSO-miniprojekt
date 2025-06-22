@@ -136,6 +136,9 @@ jobs:
           load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ github.event.repository.pushed_at }}
           tags: local-scan:latest
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@master
@@ -166,17 +169,37 @@ jobs:
       - uses: actions/checkout@v4
       - name: Start Juice Shop container
         run: |
-          docker run -d --name juice-shop -p 127.0.0.1:3000:3000 local-scan:latest
-          echo "Waiting for application to start..."
-          for i in {1..60}; do
-            if curl -f http://localhost:3000 >/dev/null 2>&1; then
-              echo "Application is ready!"
-              break
-            fi
-            echo "Attempt $i: Application not ready yet..."
-            sleep 5
-          done
+          # Cleanup previous containers
+          docker stop juice-shop || true
+          docker rm juice-shop || true
+          
+          # Run with production settings and health check
+          docker run -d \
+            --name juice-shop \
+            -p 127.0.0.1:3000:3000 \
+            -e NODE_ENV=production \
+            -e SQLITE_PATH=/juice-shop/data/juiceshop.sqlite \
+            --health-cmd="curl -f http://localhost:3000 || exit 1" \
+            --health-interval=10s \
+            --health-timeout=5s \
+            --health-retries=10 \
+            local-scan:latest
+          
+          # Wait with timeout
+          echo "Waiting for Juice Shop to start..."
+          timeout 300 bash -c 'while [[ $(docker inspect -f "{{.State.Health.Status}}" juice-shop) != "healthy" ]]; do
+            sleep 10;
+            docker logs juice-shop --tail 20
+          done'
+          
+          # Final verification
           docker logs juice-shop --tail 100
+          curl -v http://localhost:3000
+      - name: Debug container status
+        if: always()
+        run: |
+          docker ps -a
+          docker inspect juice-shop
       - name: Run OWASP ZAP scan
         uses: zaproxy/action-full-scan@v0.12.0
         with:
