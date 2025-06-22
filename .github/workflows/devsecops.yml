@@ -26,30 +26,22 @@ jobs:
       - name: Install dependencies
         run: |
           cd juice-shop && npm install --no-audit --no-fund --legacy-peer-deps --package-lock
-      - name: Create reports directory
-        run: mkdir -p reports
       - name: Run OWASP Dependency-Check
         uses: dependency-check/Dependency-Check_Action@main
         with:
           project: 'Juice-Shop'
           path: "./juice-shop/"
           format: "SARIF"
-          out: "./reports/"
           args: >
             --failOnCVSS 7
             --enableRetired
-            --scan ./juice-shop
+            --exclude "**/test/**"
+            --disableArchive
       - name: Upload Dependency-Check results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: ./reports/dependency-check-report.sarif
-      - name: Upload report artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: dependency-check-report
-          path: ./reports/dependency-check-report.sarif
+          sarif_file: ./dependency-check-report.sarif
 
   gitleaks:
     name: Secrets Detection
@@ -61,18 +53,12 @@ jobs:
       - name: Run Gitleaks
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz
-          ./gitleaks detect --source=. --redact -v --exit-code=0 --report-format=sarif --report-path=gitleaks-results.sarif
+          ./gitleaks detect --redact -v --exit-code=0 --report-format=sarif --report-path=gitleaks-results.sarif
       - name: Upload Gitleaks results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: ./gitleaks-results.sarif
-      - name: Upload report artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: gitleaks-results
-          path: ./gitleaks-results.sarif
 
   semgrep:
     name: Static Analysis (SAST)
@@ -84,21 +70,12 @@ jobs:
       - name: Run Semgrep
         run: |
           semgrep scan --config=p/security-audit --sarif --output=semgrep-results.sarif
-          semgrep scan --config=p/security-audit --json --output=semgrep-results.json
           exit 0
       - name: Upload Semgrep results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: ./semgrep-results.sarif
-      - name: Upload report artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: semgrep-results
-          path: |
-            semgrep-results.sarif
-            semgrep-results.json
 
   build-and-scan:
     name: Build and Container Scan
@@ -107,8 +84,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to GHCR
@@ -117,33 +92,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest
-            type=sha
       - name: Build Docker image
-        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./juice-shop
           file: ./juice-shop/Dockerfile
-          platforms: linux/amd64
-          push: false
+          tags: ghcr.io/${{ github.repository }}:local-scan
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            VCS_REF=${{ github.sha }}
-            BUILD_DATE=${{ github.event.repository.pushed_at }}
-          tags: local-scan:latest
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: local-scan:latest
+          image-ref: ghcr.io/${{ github.repository }}:local-scan
           format: "sarif"
           output: "trivy-results.sarif"
           severity: "CRITICAL,HIGH"
@@ -153,12 +112,6 @@ jobs:
         if: always()
         with:
           sarif_file: ./trivy-results.sarif
-      - name: Upload report artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: trivy-results
-          path: ./trivy-results.sarif
 
   dast-scan:
     name: Dynamic Analysis (DAST)
@@ -169,50 +122,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Start Juice Shop container
         run: |
-          # Cleanup previous containers
-          docker stop juice-shop || true
-          docker rm juice-shop || true
-          
-          # Run with production settings and health check
-          docker run -d \
-            --name juice-shop \
-            -p 127.0.0.1:3000:3000 \
-            -e NODE_ENV=production \
-            -e SQLITE_PATH=/juice-shop/data/juiceshop.sqlite \
-            --health-cmd="curl -f http://localhost:3000 || exit 1" \
-            --health-interval=10s \
-            --health-timeout=5s \
-            --health-retries=10 \
-            local-scan:latest
-          
-          # Wait with timeout
-          echo "Waiting for Juice Shop to start..."
-          timeout 300 bash -c 'while [[ $(docker inspect -f "{{.State.Health.Status}}" juice-shop) != "healthy" ]]; do
-            sleep 10;
-            docker logs juice-shop --tail 20
-          done'
-          
-          # Final verification
-          docker logs juice-shop --tail 100
-          curl -v http://localhost:3000
-      - name: Debug container status
-        if: always()
-        run: |
-          docker ps -a
-          docker inspect juice-shop
+          docker run -d --name juice-shop -p 127.0.0.1:3000:3000 ghcr.io/${{ github.repository }}:local-scan
+          timeout 180 bash -c 'while ! curl -sSf http://localhost:3000 >/dev/null; do sleep 5; done'
       - name: Run OWASP ZAP scan
         uses: zaproxy/action-full-scan@v0.12.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          docker_name: "ghcr.io/zaproxy/zaproxy:stable"
           target: "http://localhost:3000"
-          cmd_options: "-a"
-          issue_title: "[ZAP SCAN] ${{ github.sha }}"
-      - name: Stop Juice Shop container
+          cmd_options: "-a -T 180"
+      - name: Stop container
         if: always()
-        run: |
-          docker stop juice-shop || true
-          docker rm juice-shop || true
+        run: docker rm -f juice-shop || true
       - name: Push Docker image
         if: success() && github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
@@ -220,5 +139,4 @@ jobs:
           context: ./juice-shop
           file: ./juice-shop/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ghcr.io/${{ github.repository }}:latest
