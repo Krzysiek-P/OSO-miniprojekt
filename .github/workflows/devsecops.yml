@@ -92,7 +92,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push Docker image
+      - name: Build and push Docker image (temporary)
         uses: docker/build-push-action@v5
         with:
           context: ./juice-shop
@@ -120,6 +120,42 @@ jobs:
     needs: build-and-scan
     if: always()
     runs-on: ubuntu-latest
+    services:
+      juice-shop:
+        image: ghcr.io/krzysiek-p/juice-shop:local-scan
+        ports:
+          - 3000:3000
+        options: >-
+          --health-cmd "curl -f http://localhost:3000 || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Wait for Juice Shop to start
+        run: |
+          echo "Waiting for Juice Shop to be healthy..."
+          docker inspect --format='{{json .State.Health.Status}}' juice-shop
+          while [ $(docker inspect --format='{{json .State.Health.Status}}' juice-shop) != "\"healthy\"" ]; do
+            sleep 5;
+            docker logs juice-shop --tail 20 || true;
+          done
+          echo "Juice Shop is ready!"
+
+      - name: Run OWASP ZAP scan
+        uses: zaproxy/action-full-scan@v0.12.0
+        with:
+          target: "http://juice-shop:3000"
+          cmd_options: "-a -T 300"
+          container_name: "juice-shop"
+
+  push-to-ghcr:
+    name: Push to GitHub Container Registry
+    needs: [build-and-scan, dast-scan]
+    if: success() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - name: Login to GHCR
@@ -128,30 +164,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Start Juice Shop container
-        run: |
-          docker rm -f juice-shop || true
-          docker pull ghcr.io/krzysiek-p/juice-shop:local-scan
-          docker run -d \
-            --name juice-shop \
-            -p 127.0.0.1:3000:3000 \
-            ghcr.io/krzysiek-p/juice-shop:local-scan
-          
-          # Wait for Juice Shop to start
-          timeout 300 bash -c 'while ! curl -sSf http://localhost:3000 >/dev/null; do
-            sleep 5
-            docker logs juice-shop --tail 20 || true
-          done'
-      - name: Run OWASP ZAP scan
-        uses: zaproxy/action-full-scan@v0.12.0
-        with:
-          target: "http://localhost:3000"
-          cmd_options: "-a -T 300"
-      - name: Push final Docker image
-        if: success() && github.event_name != 'pull_request'
+      - name: Build and push final image
         uses: docker/build-push-action@v5
         with:
           context: ./juice-shop
           file: ./juice-shop/Dockerfile
           push: true
-          tags: ghcr.io/krzysiek-p/juice-shop:latest
+          tags: |
+            ghcr.io/krzysiek-p/juice-shop:latest
+            ghcr.io/krzysiek-p/juice-shop:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
