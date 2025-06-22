@@ -14,7 +14,7 @@ permissions:
   issues: write
 
 env:
-  IMAGE_NAME: ghcr.io/krzysiek-p/juice-shop
+  IMAGE_NAME: "ghcr.io/krzysiek-p/juice-shop"
 
 jobs:
   dependency-check:
