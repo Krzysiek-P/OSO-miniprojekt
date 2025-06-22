@@ -92,13 +92,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build Docker image
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: ./juice-shop
           file: ./juice-shop/Dockerfile
+          push: true
           tags: ghcr.io/krzysiek-p/juice-shop:local-scan
-          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -129,6 +131,7 @@ jobs:
       - name: Start Juice Shop container
         run: |
           docker rm -f juice-shop || true
+          docker pull ghcr.io/krzysiek-p/juice-shop:local-scan
           docker run -d \
             --name juice-shop \
             -p 127.0.0.1:3000:3000 \
@@ -144,7 +147,7 @@ jobs:
         with:
           target: "http://localhost:3000"
           cmd_options: "-a -T 300"
-      - name: Push Docker image
+      - name: Push final Docker image
         if: success() && github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
